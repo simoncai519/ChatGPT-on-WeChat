@@ -31,4 +31,5 @@ export const Config: IConfig = {
   openaiApiKey: configFile.openaiApiKey,
   openaiOrganizationID: configFile.openaiOrganizationID || "",
   chatgptTriggerKeyword: configFile.chatgptTriggerKeyword || "",
+  chatgptTriggerContact: configFile.chatgptTriggerContact || [],
 };

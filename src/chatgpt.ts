@@ -2,7 +2,9 @@ import { Config } from "./config.js";
 import { Message } from "wechaty";
 import { ContactInterface, RoomInterface } from "wechaty/impls";
 import { Configuration, OpenAIApi } from "openai";
+import HttpsProxyAgent from 'https-proxy-agent';
 
+const startTime: Date = new Date();
 enum MessageType {
   Unknown = 0,
   Attachment = 1, // Attach(6),
@@ -34,6 +36,9 @@ export class ChatGPTBot {
   // chatbot trigger keyword
   chatgptTriggerKeyword: string = Config.chatgptTriggerKeyword;
 
+  // chatbot trigger contact
+  chatgptTriggerContact: [] = Config.chatgptTriggerContact;
+
   // ChatGPT error response
   chatgptErrorMessage: string = "🤖️：ChatGPT摆烂了，请稍后再试～";
 
@@ -49,7 +54,19 @@ export class ChatGPTBot {
 
   // ChatGPT system content configuration (guided by OpenAI official document)
   currentDate: string = new Date().toISOString().split("T")[0];
-  chatgptSystemContent: string = `You are ChatGPT, a large language model trained by OpenAI. Answer as concisely as possible.\nKnowledge cutoff: 2021-09-01\nCurrent date: ${this.currentDate}`;
+  chatgptSystemContent: string = `我叫蔡文光，现在在开车，你假装是我，帮我回复老婆发给我的信息
+------
+之前的部分聊天如下，请参考其中的语气：
+老婆：你睡了没有
+我：没
+老婆：去睡会
+我：迈
+我：准备吃饭
+老婆：别待会困了
+我：不会喏
+------
+后面会直接输入老婆发的消息内容。
+  `;
 
   // message size for a single reply by the bot
   SINGLE_MESSAGE_MAX_SIZE: number = 500;
@@ -143,6 +160,21 @@ export class ChatGPTBot {
     return triggered;
   }
 
+  private triggerGPTContactMessage(
+    talker: string
+  ): boolean {
+    const chatgptTriggerContact = this.chatgptTriggerContact;
+    let triggered = false;
+    for (const contact of chatgptTriggerContact){
+      if (contact === talker) {triggered = true;break};
+      
+    }
+    // if (triggered) {
+    //   console.log(`🎯 ChatGPT triggered: ${text}`);
+    // }
+    return triggered;
+  }
+
   // filter out the message that does not need to be processed
   private isNonsense(
     talker: ContactInterface,
@@ -186,7 +218,13 @@ export class ChatGPTBot {
       const response = await this.openaiApiInstance.createChatCompletion({
         ...this.chatgptModelConfig,
         messages: inputMessages,
-      });
+      },        
+      {
+        proxy: false,
+        httpAgent: HttpsProxyAgent('http://127.0.0.1:9999'),
+        httpsAgent: HttpsProxyAgent('http://127.0.0.1:9999')
+      }
+      );
       // use OpenAI API to get ChatGPT reply message
       const chatgptReplyMessage =
         response?.data?.choices[0]?.message?.content?.trim();
@@ -253,9 +291,12 @@ export class ChatGPTBot {
     // do nothing if the message:
     //    1. is irrelevant (e.g. voice, video, location...), or
     //    2. doesn't trigger bot (e.g. wrong trigger-word)
+    let msgDate = message.date();
+    if (msgDate.getTime() <= startTime.getTime()) {return;}
     if (
       this.isNonsense(talker, messageType, rawText) ||
-      !this.triggerGPTMessage(rawText, isPrivateChat)
+      !this.triggerGPTMessage(rawText, isPrivateChat) ||
+      !this.triggerGPTContactMessage(talker.name())
     ) {
       return;
     }
