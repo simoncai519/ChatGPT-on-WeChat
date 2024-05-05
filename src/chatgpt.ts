@@ -2,9 +2,11 @@ import { Config } from "./config.js";
 import { Message } from "wechaty";
 import { ContactInterface, RoomInterface } from "wechaty/impls";
 import { Configuration, OpenAIApi } from "openai";
-import HttpsProxyAgent from 'https-proxy-agent';
+import { chatHistory } from './main.js';
+import { prompts, ID2Name } from './prompts.js'
 
 const startTime: Date = new Date();
+const delay = async (ms: number) => new Promise(res => setTimeout(res, ms));
 enum MessageType {
   Unknown = 0,
   Attachment = 1, // Attach(6),
@@ -39,6 +41,9 @@ export class ChatGPTBot {
   // chatbot trigger contact
   chatgptTriggerContact: [] = Config.chatgptTriggerContact;
 
+  // chatbot trigger contactID
+  chatgptTriggerContactID: {} = ID2Name;
+
   // ChatGPT error response
   chatgptErrorMessage: string = "🤖️：ChatGPT摆烂了，请稍后再试～";
 
@@ -46,27 +51,16 @@ export class ChatGPTBot {
   // please refer to the OpenAI API doc: https://beta.openai.com/docs/api-reference/introduction
   chatgptModelConfig: object = {
     // this model field is required
-    model: "gpt-3.5-turbo",
+    model: "moonshot-v1-8k",
     // add your ChatGPT model parameters below
     temperature: 0.8,
     // max_tokens: 2000,
+    presence_penalty: 1.8,
+    frequency_penalty: 1.8
   };
 
   // ChatGPT system content configuration (guided by OpenAI official document)
   currentDate: string = new Date().toISOString().split("T")[0];
-  chatgptSystemContent: string = `我叫蔡文光，现在在开车，你假装是我，帮我回复老婆发给我的信息
-------
-之前的部分聊天如下，请参考其中的语气：
-老婆：你睡了没有
-我：没
-老婆：去睡会
-我：迈
-我：准备吃饭
-老婆：别待会困了
-我：不会喏
-------
-后面会直接输入老婆发的消息内容。
-  `;
 
   // message size for a single reply by the bot
   SINGLE_MESSAGE_MAX_SIZE: number = 500;
@@ -92,8 +86,9 @@ export class ChatGPTBot {
     try {
       // OpenAI account configuration
       this.openaiAccountConfig = new Configuration({
-        organization: Config.openaiOrganizationID,
+        // organization: Config.openaiOrganizationID,
         apiKey: Config.openaiApiKey,
+        basePath: "https://api.moonshot.cn/v1"
       });
       // OpenAI API instance
       this.openaiApiInstance = new OpenAIApi(this.openaiAccountConfig);
@@ -161,12 +156,18 @@ export class ChatGPTBot {
   }
 
   private triggerGPTContactMessage(
-    talker: string
+    talker: ContactInterface
   ): boolean {
+    if (talker.id in this.chatgptTriggerContactID){
+      console.log(`Talker ID triggered: ${talker.id}`);
+      return true;}
     const chatgptTriggerContact = this.chatgptTriggerContact;
     let triggered = false;
     for (const contact of chatgptTriggerContact){
-      if (contact === talker) {triggered = true;break};
+      if (contact === talker.name()) {
+        triggered = true;
+        console.log(`Talker Nmae triggered: ${talker.name()}`);
+        break};
       
     }
     // if (triggered) {
@@ -196,39 +197,39 @@ export class ChatGPTBot {
 
   // create messages for ChatGPT API request
   // TODO: store history chats for supporting context chat
-  private createMessages(text: string): Array<Object> {
+  private createMessages(text: string, talkerName: string=""): Array<Object> {
     const messages = [
       {
         role: "system",
-        content: this.chatgptSystemContent,
+        content: prompts[talkerName],
       },
       {
         role: "user",
-        content: text,
-      },
+        content: text+'\n我：',
+      }
     ];
     return messages;
   }
 
   // send question to ChatGPT with OpenAI API and get answer
-  private async onChatGPT(text: string): Promise<string> {
-    const inputMessages = this.createMessages(text);
+  private async onChatGPT(text: string, talkerName: string=""): Promise<string> {
+    const inputMessages = this.createMessages(text, talkerName);
     try {
+      console.log('messages:');
+      console.log(inputMessages);
       // config OpenAI API request body
       const response = await this.openaiApiInstance.createChatCompletion({
         ...this.chatgptModelConfig,
         messages: inputMessages,
-      },        
-      {
-        proxy: false,
-        httpAgent: HttpsProxyAgent('http://127.0.0.1:9999'),
-        httpsAgent: HttpsProxyAgent('http://127.0.0.1:9999')
       }
       );
       // use OpenAI API to get ChatGPT reply message
-      const chatgptReplyMessage =
+      let chatgptReplyMessage =
         response?.data?.choices[0]?.message?.content?.trim();
-      console.log(`🤖️ ChatGPT says: ${chatgptReplyMessage}`);
+      const regex = /^.{0,5}[:：]/;
+      chatgptReplyMessage = chatgptReplyMessage.replace(regex, '');
+      console.log('GPT response:');
+      console.log(chatgptReplyMessage);
       return chatgptReplyMessage;
     } catch (e: any) {
       console.error(`❌ ${e}`);
@@ -243,7 +244,7 @@ export class ChatGPTBot {
       if (errorMessage) {
         console.error(`❌ ${errorMessage}`);
       }
-      return this.chatgptErrorMessage;
+      return '啥意思';
     }
   }
 
@@ -266,10 +267,20 @@ export class ChatGPTBot {
 
   // reply to private message
   private async onPrivateMessage(talker: ContactInterface, text: string) {
+    const talkerID = talker.id;
+    let talkerName = ''
+    if (talkerID in ID2Name) {talkerName = ID2Name[talkerID];}
+    else {talkerName = talker.name();}
+    if (!(talkerName in chatHistory)) {const chatgptTriggerContactID: Map<string, string> = new Map();
+      chatHistory[talkerName] = [talkerName+"："+text];
+    } else {chatHistory[talkerName].push(talkerName+"："+text);}
     // get reply from ChatGPT
-    const chatgptReplyMessage = await this.onChatGPT(text);
+    const chatHistoryStr = chatHistory[talkerName].join('\n');
+    const chatgptReplyMessage = await this.onChatGPT(chatHistoryStr, talkerName);
     // send the ChatGPT reply to chat
+    await delay(20000);
     await this.reply(talker, chatgptReplyMessage);
+    chatHistory[talker.name()].push("我："+chatgptReplyMessage);
   }
 
   // reply to group message
@@ -288,15 +299,24 @@ export class ChatGPTBot {
     const room = message.room();
     const messageType = message.type();
     const isPrivateChat = !room;
+    const messsageTo = message.listener();
     // do nothing if the message:
     //    1. is irrelevant (e.g. voice, video, location...), or
     //    2. doesn't trigger bot (e.g. wrong trigger-word)
     let msgDate = message.date();
     if (msgDate.getTime() <= startTime.getTime()) {return;}
+    if (talker.name()=='蔡文光'){
+      if (messsageTo&&rawText!='') {
+        if (messsageTo.name()!='蔡文光'){
+          if (!(messsageTo.name() in chatHistory)) {
+            chatHistory[messsageTo.name()] = ["我："+rawText];
+          } else {chatHistory[messsageTo.name()].push("我："+rawText);}
+          return;
+      }}}
     if (
       this.isNonsense(talker, messageType, rawText) ||
       !this.triggerGPTMessage(rawText, isPrivateChat) ||
-      !this.triggerGPTContactMessage(talker.name())
+      !this.triggerGPTContactMessage(talker)
     ) {
       return;
     }

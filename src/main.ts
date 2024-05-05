@@ -2,6 +2,8 @@ import QRCode from "qrcode";
 import { WechatyBuilder } from "wechaty";
 import { ChatGPTBot } from "./chatgpt.js";
 
+export let chatHistory: {[name: string]: [string]} = {};
+
 // Wechaty instance
 const weChatBot = WechatyBuilder.build({
   name: "my-wechat-bot",
@@ -24,6 +26,7 @@ async function main() {
       console.log(`✅ User ${user} has logged in`);
       chatGPTBot.setBotName(user.name());
       await chatGPTBot.startGPTBot();
+      // setInterval(sendScheduledMessage, 60000); // Send a message every 60 seconds (1 minute)
     })
     // message handler
     .on("message", async (message: any) => {
@@ -36,6 +39,8 @@ async function main() {
       } catch (e) {
         console.error(`❌ ${e}`);
       }
+    // send message on a fixed schedule
+    
     });
 
   try {
@@ -47,4 +52,27 @@ async function main() {
     );
   }
 }
+
+// Function to send a scheduled message
+async function sendScheduledMessage() {
+  // Replace 'YOUR_MESSAGE' with the message you want to send
+  const message = '陪我聊天';
+
+  // Replace 'CONTACT_NAME' with the name of the contact you want to send the message to
+  const contact = await weChatBot.Contact.find({ name: '蔡文光' });
+  
+
+  if (contact) {
+    try {
+      await contact.say(message);
+      console.log(`Scheduled message sent to ${contact.name()}`);
+      chatHistory[contact.name()].push("我："+message);
+    } catch (e) {
+      console.error(`Failed to send scheduled message to ${contact.name()}: ${e}`);
+    }
+  } else {
+    console.error('Contact not found');
+  }
+}
+
 main();
